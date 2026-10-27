@@ -1,0 +1,64 @@
+# Home-Assistant-Package für den WhatsApp-Arbeitswecker.
+# Geprüfter Ziel-Skriptdienst des vorhandenen Systems:
+# script.test_arbeitswecker_fire_hd_start
+
+rest:
+  - resource: !secret whatsapp_arbeitswecker_url
+    scan_interval: 60
+    timeout: 10
+    headers:
+      Authorization: !secret whatsapp_arbeitswecker_api_key
+    sensor:
+      - name: WhatsApp Arbeitsplan
+        unique_id: whatsapp_arbeitsplan
+        icon: mdi:calendar-clock
+        value_template: >-
+          {{ value_json.updated_at | default('unknown', true) }}
+        json_attributes:
+          - version
+          - count
+          - updated_at
+          - entries
+
+input_boolean:
+  whatsapp_arbeitswecker_aktiv:
+    name: WhatsApp Arbeitswecker aktiv
+    icon: mdi:alarm-check
+    initial: true
+
+input_text:
+  whatsapp_arbeitswecker_letzte_ausloesung:
+    name: WhatsApp Arbeitswecker letzte Auslösung
+    max: 64
+
+automation:
+  - id: whatsapp_arbeitswecker_60_minuten_vorher
+    alias: WhatsApp Arbeitswecker – 60 Minuten vorher
+    description: Startet das vorhandene Weckerskript einmalig 60 Minuten vor Arbeitsbeginn.
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        minutes: "*"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.whatsapp_arbeitswecker_aktiv
+        state: "on"
+      - condition: template
+        value_template: >-
+          {% set entries = state_attr('sensor.whatsapp_arbeitsplan', 'entries') | default([], true) %}
+          {% set current = now().strftime('%Y-%m-%d %H:%M') %}
+          {% set target = (now() + timedelta(minutes=60)).strftime('%Y-%m-%d %H:%M') %}
+          {% set ns = namespace(hit=false) %}
+          {% for entry in entries if entry is mapping and not entry.get('free', false) %}
+            {% if entry.get('date') ~ ' ' ~ entry.get('start') == target %}
+              {% set ns.hit = true %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.hit and states('input_text.whatsapp_arbeitswecker_letzte_ausloesung') != current }}
+    actions:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.whatsapp_arbeitswecker_letzte_ausloesung
+        data:
+          value: "{{ now().strftime('%Y-%m-%d %H:%M') }}"
+      - action: script.test_arbeitswecker_fire_hd_start
